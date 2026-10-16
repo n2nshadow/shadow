@@ -9,13 +9,15 @@ can't send UDP. So this GitHub Action does the asking:
 2. It asks each server for its status (`getstatus` and `getinfo`, the same packets the in-game server
    browser sends), four times, a minute apart.
 3. It posts each round to `https://dutymapper.com/api/servers/report`.
-4. `banner.py` draws the banners (eight sizes) from the server's `/servers/<ip>:<port>.json` and
-   uploads them.
+4. `banner.py` draws the banners (eight sizes, plus a picture of the website widget for forums) from
+   the server's `/servers/<ip>:<port>.json` and uploads them: within a minute when a server's map,
+   mode or status changes, with new player counts at the end of each run, and at least every 10
+   minutes. Every upload is a storage write, so they aren't redrawn every minute regardless.
 
 Each run of the workflow (`.github/workflows/server-tracker.yml`) takes about 4 minutes, and its
-last step starts the next run, so the site hears from every server about once a minute and the
-banners are redrawn every 4 minutes. GitHub's own schedule only restarts that chain if it ever
-stops: on its own it runs hours late (on 2026-10-16, about every 4 hours).
+last step starts the next run, so the site hears from every server about once a minute. GitHub's
+own schedule only restarts that chain if it ever stops: on its own it runs hours late (on
+2026-10-16, about every 4 hours).
 
 To stop the tracker, disable the workflow in the Actions tab. To restart it, open the workflow
 there and click "Run workflow".

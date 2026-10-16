@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """DutyMapper server tracker.
 
-Runs in GitHub Actions (.github/workflows/server-tracker.yml) every few minutes:
+Runs in GitHub Actions (.github/workflows/server-tracker.yml), one run after another:
 
   1. asks dutymapper.com which servers to watch (GET /api/servers/targets)
   2. asks each server for its status the way the in-game browser does (UDP getstatus + getinfo).
      The website can't do this itself: Cloudflare Workers have no UDP.
   3. posts what it heard to dutymapper.com (POST /api/servers/report), ROUNDS times, GAP seconds apart
-  4. draws the server banners (banner.py) and uploads them (POST /api/servers/banner)
+  4. redraws a server's banners (banner.py) and uploads them (POST /api/servers/banner) as soon as its
+     map, mode or status changes, with new player counts at the end of the run, and at least every
+     REFRESH seconds (the day's graph moves on). Each upload costs a storage write, so not every round.
 
 There is no password: every request carries the token GitHub signs for this workflow (OIDC), and
 dutymapper.com checks GitHub's signature, the repo and the workflow before it accepts anything.
@@ -23,10 +25,12 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 
 SITE = os.environ.get("DUTYMAPPER_URL", "https://dutymapper.com").rstrip("/")
 ROUNDS = int(os.environ.get("ROUNDS", "4"))
 GAP = int(os.environ.get("GAP", "60"))
+REFRESH = int(os.environ.get("REFRESH", "600"))
 DRY = "--dry-run" in sys.argv
 UA = "dutymapper-server-tracker (+https://github.com/n2nshadow/shadow)"
 PLAYER = re.compile(rb'^(-?\d+) (-?\d+) "(.*)"$')
@@ -73,12 +77,20 @@ def check(ip, port):
     return {"ip": ip, "port": port, "online": True, "rtt_ms": rtt, "info": info, "players": players}
 
 
+_token = {"value": None, "until": 0.0}
+
+
 def github_token():
-    """The workflow's OIDC token, made out to dutymapper.com."""
+    """The workflow's OIDC token, made out to dutymapper.com (reused for a minute: one banner
+    drawing is nine uploads)."""
+    if _token["value"] and time.time() < _token["until"]:
+        return _token["value"]
     url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"] + "&audience=" + urllib.parse.quote(SITE, safe="")
     req = urllib.request.Request(url, headers={"Authorization": "bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"], "User-Agent": UA})
     with urllib.request.urlopen(req, timeout=20) as r:
-        return json.load(r)["value"]
+        _token["value"] = json.load(r)["value"]
+    _token["until"] = time.time() + 60
+    return _token["value"]
 
 
 def call(method, path, body=None, content_type="application/json", signed=False):
@@ -92,19 +104,56 @@ def call(method, path, body=None, content_type="application/json", signed=False)
         return r.read()
 
 
+def looks(rep):
+    """What a server's banners show: (map, mode, name -- or offline) and (player counts)."""
+    if not rep["online"]:
+        return "offline", ""
+    i = rep["info"]
+    return f"{i.get('mapname', '')}|{i.get('g_gametype', '')}|{i.get('sv_hostname', '')}", f"{len(rep['players'])}|{i.get('g_humanplayers', '')}"
+
+
+def stamp(iso):
+    try:
+        return datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def draw(addr, sig):
+    """Draws every banner for one server from its JSON (which has this round's report in it) and
+    uploads them. sig is what they show, so the next run knows whether they need redrawing."""
+    import banner  # Pillow is only needed for this part
+    try:
+        data = json.loads(call("GET", f"/servers/{addr}.json"))
+        drawn = banner.draw_all(data, SITE)
+    except Exception as err:
+        print(f"  banners for {addr} failed:", err, file=sys.stderr)
+        return False
+    sent = 0
+    for kind, png in drawn.items():
+        try:
+            call("POST", f"/api/servers/banner?server={urllib.parse.quote(addr)}&kind={kind}&sig={urllib.parse.quote(sig)}", png, "image/png", signed=True)
+            sent += 1
+        except Exception as err:
+            print(f"  banner {kind} for {addr} failed:", err, file=sys.stderr)
+    print(f"  banners for {addr}: {sent} of {len(drawn)} sent ({data.get('map')}, {data.get('players')} playing)")
+    return sent > 0
+
+
 def main():
     servers = json.loads(call("GET", "/api/servers/targets"))["servers"]
     if not servers:
         print("no servers to check")
         return
-    last = {}
+    # what each server's banners show right now and when they were drawn, as the site has it
+    shown = {f"{s['ip']}:{s['port']}": {"sig": s.get("banner_sig") or "", "at": stamp(s.get("banner_at"))} for s in servers}
+    start = time.monotonic()
     for n in range(ROUNDS):
-        if n:
-            time.sleep(GAP)
+        if n:  # a steady minute apart, however long the drawing took
+            time.sleep(max(0.0, start + n * GAP - time.monotonic()))
         with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
             reports = list(pool.map(lambda s: check(s["ip"], int(s["port"])), servers))
         for rep in reports:
-            last[f"{rep['ip']}:{rep['port']}"] = rep
             state = f"{len(rep['players'])} connected, {rep['info'].get('mapname')}" if rep["online"] else "no answer"
             print(f"[{n + 1}/{ROUNDS}] {rep['ip']}:{rep['port']}: {state}")
         if DRY:
@@ -112,20 +161,22 @@ def main():
             continue
         try:
             print("  reported:", call("POST", "/api/servers/report", json.dumps({"reports": reports}).encode(), signed=True).decode())
-        except Exception as err:  # one failed post shouldn't end the run
+        except Exception as err:  # one failed post shouldn't end the run, but don't draw from old data
             print("  report failed:", err, file=sys.stderr)
-
-    if DRY or os.environ.get("NO_BANNERS") == "1":
-        return
-    import banner  # Pillow is only needed for this part
-    for addr in last:
-        try:
-            data = json.loads(call("GET", f"/servers/{addr}.json"))
-            for kind, png in banner.draw_all(data, SITE).items():
-                call("POST", f"/api/servers/banner?server={urllib.parse.quote(addr)}&kind={kind}", png, "image/png", signed=True)
-                print(f"  banner {kind} for {addr}: {len(png)} bytes")
-        except Exception as err:
-            print(f"  banner for {addr} failed:", err, file=sys.stderr)
+            continue
+        if os.environ.get("NO_BANNERS") == "1":
+            continue
+        last = n == ROUNDS - 1
+        for rep in reports:
+            addr = f"{rep['ip']}:{rep['port']}"
+            look, counts = looks(rep)
+            sig = f"{look}\n{counts}"
+            was = shown.setdefault(addr, {"sig": "", "at": 0.0})
+            # a new map, mode or status shows straight away; new player counts at the end of the run;
+            # and nothing waits longer than REFRESH
+            if look != was["sig"].split("\n")[0] or (last and sig != was["sig"]) or time.time() - was["at"] >= REFRESH:
+                if draw(addr, sig):
+                    was.update(sig=sig, at=time.time())
 
 
 if __name__ == "__main__":

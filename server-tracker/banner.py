@@ -1,7 +1,14 @@
 """Draws a server's DutyMapper banners from /servers/<ip:port>.json.
 
-  tall  160 x 248  -- a sidebar / signature card
-  wide  560 x  95  -- a forum-signature strip
+  micro     350 x  20  -- one line
+  small     468 x  60  -- a classic signature banner
+  wide      560 x  95  -- a forum-signature strip
+  tall      160 x 248  -- a sidebar / signature card
+  square    250 x 250
+  large     560 x 250  -- wide, with everyone who's on
+  sidebar   240 x 440  -- tall, with everyone who's on
+  showcase  760 x 340  -- everything
+  widget    260 x 660  -- a picture of the website widget, for forums
 
 Polished rather than a wall of numbers: the map's picture, the server's name, one big player count and a
 smooth 24-hour line, in the website's colours and fonts (Big Shoulders Display, Barlow, JetBrains Mono --
@@ -340,8 +347,9 @@ def clip(c, s, kind, size, width):
     return s.rstrip() + "…"
 
 
-def player_list(c, data, x, y, width, rows, columns=1, gap=10, row_h=14):
-    """Who's on: people first by score, then bots (dimmed); '+N more' when they don't all fit."""
+def player_list(c, data, x, y, width, rows, columns=1, gap=10, row_h=14, fs=1.0):
+    """Who's on: people first by score, then bots (dimmed); '+N more' when they don't all fit.
+    fs scales the text, for the bigger cards."""
     players = data.get("online_players") or []
     people = [p for p in players if not p.get("bot")]
     bots = [p for p in players if p.get("bot")]
@@ -352,7 +360,7 @@ def player_list(c, data, x, y, width, rows, columns=1, gap=10, row_h=14):
     colw = (width - gap * (columns - 1)) / columns
     if not ordered:
         msg = "Nobody's on right now." if data.get("status") == "online" else "Not answering." if data.get("status") == "offline" else "No data yet."
-        c.text(x, y + row_h / 2, msg, "body", 8.5, FAINT, anchor="lm")
+        c.text(x, y + row_h / 2, msg, "body", 8.5 * fs, FAINT, anchor="lm")
         return
     for i, p in enumerate(shown + ([None] if more > 0 else [])):
         col, row = divmod(i, rows)
@@ -362,19 +370,19 @@ def player_list(c, data, x, y, width, rows, columns=1, gap=10, row_h=14):
             ImageDraw.Draw(band).rounded_rectangle((px * K, py * K, (px + colw) * K, (py + row_h - 1) * K), radius=3 * K, fill=(255, 255, 255, 9))
             c.im.alpha_composite(band)
         if p is None:
-            c.text(px + 6, py + row_h / 2, f"+{more + 1} more", "body", 8, MUTED, anchor="lm")
+            c.text(px + 6, py + row_h / 2, f"+{more + 1} more", "body", 8 * fs, MUTED, anchor="lm")
             continue
         bot = p.get("bot")
         score = str(p.get("score", 0))
-        sw = c.width(score, "mono", 7.5)
+        sw = c.width(score, "mono", 7.5 * fs)
         tag = "BOT" if bot else ""
-        tw = c.width(tag, "body", 6, tracking=0.8) + 6 if tag else 0
+        tw = c.width(tag, "body", 6 * fs, tracking=0.8) + 6 if tag else 0
         raw = re.sub(r"^\[bot\]\s*", "", p.get("name") or "?", flags=re.I) if bot else (p.get("name") or "?")
-        name = clip(c, raw or "?", "body", 8.5, colw - 18 - sw - tw)
-        nw = c.text(px + 6, py + row_h / 2, name, "body", 8.5, FAINT if bot else BONE, anchor="lm")
+        name = clip(c, raw or "?", "body", 8.5 * fs, colw - 18 - sw - tw)
+        nw = c.text(px + 6, py + row_h / 2, name, "body", 8.5 * fs, FAINT if bot else BONE, anchor="lm")
         if tag:
-            c.text(px + 6 + nw + 5, py + row_h / 2 + 0.3, tag, "body", 6, FAINT, anchor="lm", tracking=0.8)
-        c.text(px + colw - 6, py + row_h / 2, score, "mono", 7.5, FAINT if bot else MUTED, anchor="rm")
+            c.text(px + 6 + nw + 5, py + row_h / 2 + 0.3, tag, "body", 6 * fs, FAINT, anchor="lm", tracking=0.8)
+        c.text(px + colw - 6, py + row_h / 2, score, "mono", 7.5 * fs, FAINT if bot else MUTED, anchor="rm")
 
 
 def count_block(c, data, x, baseline, live, label, size=44):
@@ -540,11 +548,11 @@ def square(data, site):
     return c.finish()
 
 
-def top_list(c, data, x, y, width, rows, row_h=14):
-    """Most points earned since tracking began (people only)."""
+def top_list(c, data, x, y, width, rows, row_h=14, fs=1.0):
+    """Most points earned since tracking began (people only). fs scales the text."""
     top = (data.get("top_players") or [])[:rows]
     if not top:
-        c.text(x, y + row_h / 2, "Nobody recorded yet.", "body", 8.5, FAINT, anchor="lm")
+        c.text(x, y + row_h / 2, "Nobody recorded yet.", "body", 8.5 * fs, FAINT, anchor="lm")
         return
     for i, p in enumerate(top):
         py = y + i * row_h
@@ -552,15 +560,16 @@ def top_list(c, data, x, y, width, rows, row_h=14):
             band = Image.new("RGBA", c.im.size, (0, 0, 0, 0))
             ImageDraw.Draw(band).rounded_rectangle((x * K, py * K, (x + width) * K, (py + row_h - 1) * K), radius=3 * K, fill=(255, 255, 255, 9))
             c.im.alpha_composite(band)
-        c.text(x + 6, py + row_h / 2, str(i + 1), "mono", 7.5, AMBER if i < 3 else FAINT, anchor="lm")
+        c.text(x + 6, py + row_h / 2, str(i + 1), "mono", 7.5 * fs, AMBER if i < 3 else FAINT, anchor="lm")
         score = f"{p.get('score', 0):,}"
         hrs = (p.get("seconds") or 0) / 3600
         when = f"{hrs:.0f}h" if hrs >= 1 else f"{max(1, round(hrs * 60))}m"
-        sw = c.width(score, "mono", 7.5)
-        c.text(x + width - 6, py + row_h / 2, score, "mono", 7.5, MUTED, anchor="rm")
-        c.text(x + width - 12 - sw, py + row_h / 2, when, "body", 7, FAINT, anchor="rm")
-        ww = c.width(when, "body", 7)
-        c.text(x + 20, py + row_h / 2, clip(c, p.get("name") or "?", "body", 8.5, width - 38 - sw - ww), "body", 8.5, BONE, anchor="lm")
+        sw = c.width(score, "mono", 7.5 * fs)
+        c.text(x + width - 6, py + row_h / 2, score, "mono", 7.5 * fs, MUTED, anchor="rm")
+        c.text(x + width - 12 - sw, py + row_h / 2, when, "body", 7 * fs, FAINT, anchor="rm")
+        ww = c.width(when, "body", 7 * fs)
+        nx = x + 20 * fs
+        c.text(nx, py + row_h / 2, clip(c, p.get("name") or "?", "body", 8.5 * fs, width - (nx - x) - 18 - sw - ww), "body", 8.5 * fs, BONE, anchor="lm")
 
 
 def showcase(data, site):
@@ -600,8 +609,45 @@ def showcase(data, site):
     return c.finish()
 
 
+def widget(data, site):
+    """260 x 660: a picture of the website widget, for forums (they don't run live widgets)."""
+    W, H = 260, 660
+    c = Card(W, H, 14)
+    name = plain(data.get("hostname") or data.get("name") or "").upper()
+    label, colour, live = status(data)
+    pic = picture(data.get("map_image") or site + "/static/art/servers_bunker.jpg", W, 162)
+    if pic:
+        c.paste_fading(pic, 0, 0, 0.42)
+    c.fade(0, 0, W, 30, 110, 0, (8, 8, 6))
+    c.pill(W - 10 - (c.width(label, "body", 7.5, tracking=1.1) + 19), 10, label, colour, live)
+    size, lines = fit(c, name, "display", [28, 26, 24, 22, 20, 18], W - 28, 2)
+    y = 150 - (len(lines) - 1) * size * 0.93
+    for ln in lines:
+        c.text(14, y, ln, "display", size, BONE, anchor="ls")
+        y += size * 0.93
+    mp = data.get("map_name") or data.get("map") or ""
+    gt = data.get("gametype_name") or ""
+    _, mline = fit(c, f"{mp}  ·  {gt}" if gt else mp, "body", [11.5], W - 28, 1)
+    c.text(14, 158, mline[0], "body", 11.5, MUTED)
+    count_block(c, data, 14, 224, live, label, 50)
+    c.text(14, 240, "LAST 24 HOURS", "body", 7, FAINT, tracking=1.3)
+    if data.get("peak_24h"):
+        c.text(W - 14, 240, f"PEAK {data['peak_24h']}", "body", 7, FAINT, anchor="ra", tracking=1.3)
+    c.sparkline((14, 252, W - 14, 290), data.get("history") or [], live)
+    n = len(data.get("online_players") or [])
+    c.text(14, 306, f"ONLINE NOW · {n}" if live else "ONLINE NOW", "body", 7, FAINT, tracking=1.3)
+    player_list(c, data, 12, 318, W - 24, 8, row_h=18, fs=1.25)
+    c.text(14, 476, "TOP PLAYERS", "body", 7, FAINT, tracking=1.3)
+    top_list(c, data, 12, 488, W - 24, 5, row_h=18, fs=1.25)
+    c.d.line((14 * K, (H - 32) * K, (W - 14) * K, (H - 32) * K), fill=(255, 255, 255, 22), width=K)
+    c.text(14, H - 16, data.get("address", ""), "mono", 10, BONE, anchor="lm")
+    c.text(W - 14, H - 16, "DUTYMAPPER", "display", 13, AMBER, anchor="rm", tracking=0.8)
+    return c.finish()
+
+
+# "widget" last: the site learned that one later, so the others still upload if it's refused
 KINDS = {"micro": micro, "small": small, "tall": tall, "square": square, "wide": wide,
-         "sidebar": sidebar, "large": large, "showcase": showcase}
+         "sidebar": sidebar, "large": large, "showcase": showcase, "widget": widget}
 
 
 def draw_all(data, site):
