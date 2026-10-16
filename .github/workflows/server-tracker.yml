@@ -1,0 +1,58 @@
+# DutyMapper server tracker: checks the servers dutymapper.com follows and redraws their banners.
+# See server-tracker/README.md. dutymapper.com accepts reports only from THIS file on master, which it
+# checks with the token GitHub signs for every run (no passwords or secrets anywhere).
+name: DutyMapper server tracker
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # GitHub runs schedules late when it's busy; each run checks 4 times, a minute apart
+  workflow_dispatch:
+
+permissions:
+  contents: write   # only for the keep-alive commit at the end
+  id-token: write   # the signed token dutymapper.com checks
+
+concurrency:
+  group: server-tracker
+  cancel-in-progress: false
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pillow, and the website's fonts (Google Fonts' repo, pinned commit)
+        run: |
+          pip install --quiet "pillow==11.3.0"
+          mkdir -p fonts
+          base="https://raw.githubusercontent.com/google/fonts/1d0e46c7933245c8180fe83e47917961c913bbdb/ofl"
+          curl -fsSL -o fonts/BigShouldersDisplay.ttf "$base/bigshouldersdisplay/BigShouldersDisplay%5Bwght%5D.ttf"
+          curl -fsSL -o fonts/Barlow-SemiBold.ttf "$base/barlow/Barlow-SemiBold.ttf"
+          curl -fsSL -o fonts/JetBrainsMono.ttf "$base/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf"
+
+      - name: Check the servers and send the reports
+        working-directory: server-tracker
+        env:
+          FONTS_DIR: ${{ github.workspace }}/fonts
+        run: python tracker.py
+
+      # GitHub switches off schedules in repos with no commits for 60 days. One small commit every
+      # 50 days keeps the tracker running.
+      - name: Keep the schedule alive
+        if: github.event_name == 'schedule'
+        run: |
+          last=$(git log -1 --format=%ct)
+          if [ $(( ($(date +%s) - last) / 86400 )) -ge 50 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            date -u +%F > server-tracker/keepalive.txt
+            git add server-tracker/keepalive.txt
+            git commit -m "Keep the server tracker's schedule running"
+            git push
+          fi
