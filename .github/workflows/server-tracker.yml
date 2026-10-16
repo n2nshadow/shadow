@@ -4,12 +4,15 @@
 name: DutyMapper server tracker
 
 on:
+  # GitHub runs schedules hours late when it's busy (2026-10-16: about every 4 hours), so each run
+  # starts the next one itself (the last step). The schedule only restarts that chain if it stops.
   schedule:
-    - cron: "*/5 * * * *"   # GitHub runs schedules late when it's busy; each run checks 4 times, a minute apart
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
-  contents: write   # only for the keep-alive commit at the end
+  actions: write    # each run starts the next one
+  contents: write   # only for the keep-alive commit
   id-token: write   # the signed token dutymapper.com checks
 
 concurrency:
@@ -19,15 +22,17 @@ concurrency:
 jobs:
   track:
     runs-on: ubuntu-latest
-    timeout-minutes: 9
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
+        timeout-minutes: 3
         with:
           python-version: "3.12"
 
       - name: Pillow, and the website's fonts (Google Fonts' repo, pinned commit)
+        timeout-minutes: 3
         run: |
           pip install --quiet "pillow==11.3.0"
           mkdir -p fonts
@@ -37,15 +42,16 @@ jobs:
           curl -fsSL -o fonts/JetBrainsMono.ttf "$base/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf"
 
       - name: Check the servers and send the reports
+        timeout-minutes: 7   # 4 checks a minute apart, then the banners
         working-directory: server-tracker
         env:
           FONTS_DIR: ${{ github.workspace }}/fonts
         run: python tracker.py
 
-      # GitHub switches off schedules in repos with no commits for 60 days. One small commit every
-      # 50 days keeps the tracker running.
-      - name: Keep the schedule alive
-        if: github.event_name == 'schedule'
+      # GitHub switches off scheduled workflows in repos with no commits for 60 days, and a switched-off
+      # workflow can't start the next check either. One small commit every 50 days keeps it running.
+      - name: Keep the tracker alive
+        if: github.ref == 'refs/heads/master'
         run: |
           last=$(git log -1 --format=%ct)
           if [ $(( ($(date +%s) - last) / 86400 )) -ge 50 ]; then
@@ -56,3 +62,24 @@ jobs:
             git commit -m "Keep the server tracker's schedule running"
             git push
           fi
+
+      # Start the next check, even after a failure. When a run is already waiting (the schedule's),
+      # that one carries on instead, so only one chain ever runs. After a failure, wait first, so a
+      # broken check retries every 5 minutes rather than every few seconds. To stop the tracker,
+      # disable this workflow in the Actions tab.
+      - name: Start the next check
+        if: always() && github.ref == 'refs/heads/master'
+        timeout-minutes: 6
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FAILED: ${{ job.status == 'failure' }}
+        run: |
+          if [ "$FAILED" = "true" ]; then sleep 240; fi
+          waiting=$(gh run list -R "$GITHUB_REPOSITORY" --workflow server-tracker.yml --limit 10 --json status \
+            --jq '[.[] | select(.status != "completed" and .status != "in_progress")] | length')
+          if [ "${waiting:-0}" -gt 0 ]; then echo "A run is already waiting; it carries on."; exit 0; fi
+          for try in 1 2 3; do
+            gh workflow run server-tracker.yml -R "$GITHUB_REPOSITORY" --ref master && exit 0
+            sleep 15
+          done
+          exit 1

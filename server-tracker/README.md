@@ -9,11 +9,16 @@ can't send UDP. So this GitHub Action does the asking:
 2. It asks each server for its status (`getstatus` and `getinfo`, the same packets the in-game server
    browser sends), four times, a minute apart.
 3. It posts each round to `https://dutymapper.com/api/servers/report`.
-4. `banner.py` draws the tall (160×248) and wide (560×95) banners from the server's
-   `/servers/<ip>:<port>.json` and uploads them.
+4. `banner.py` draws the banners (eight sizes) from the server's `/servers/<ip>:<port>.json` and
+   uploads them.
 
-The workflow (`.github/workflows/server-tracker.yml`) runs every 5 minutes. GitHub often starts
-scheduled runs late, so updates can be 5-15 minutes apart.
+Each run of the workflow (`.github/workflows/server-tracker.yml`) takes about 4 minutes, and its
+last step starts the next run, so the site hears from every server about once a minute and the
+banners are redrawn every 4 minutes. GitHub's own schedule only restarts that chain if it ever
+stops: on its own it runs hours late (on 2026-10-16, about every 4 hours).
+
+To stop the tracker, disable the workflow in the Actions tab. To restart it, open the workflow
+there and click "Run workflow".
 
 ## No passwords
 
@@ -35,5 +40,5 @@ This asks the servers and prints what it heard, without posting anything.
 
 ## Keep-alive
 
-GitHub switches off schedules in repos that go 60 days without a commit. Every 50 days the
-workflow updates `keepalive.txt` to keep itself running.
+GitHub switches off scheduled workflows in repos that go 60 days without a commit. Every 50 days
+the workflow updates `keepalive.txt` to keep itself running.
