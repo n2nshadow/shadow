@@ -302,7 +302,9 @@ def wide(data, site):
     pic = picture(data.get("map_image") or site + "/static/art/servers_bunker.jpg", pw, H)
     if pic:
         c.paste_fading(pic, 0, 0, 0.5, horizontal=True)
-    c.pill(9, H - 22, label, colour, live)
+    # top right of the picture, where it has already started to fade (cards print titles and credits
+    # in their left corners)
+    c.pill(pw - 8 - (c.width(label, "body", 7.5, tracking=1.1) + 19), 8, label, colour, live)
     # name and details
     x = 166
     size, lines = fit(c, name, "display", [30, 28, 26, 24, 22, 20, 18], 230, 1)
