@@ -159,8 +159,11 @@ def main():
         if DRY:
             print(json.dumps(reports, indent=1)[:3000])
             continue
+        # "final": the site writes a server's full state only on a run's last round (or when its map, mode or
+        # status changes), to stay inside D1's free 100,000 written rows a day
+        body = {"reports": reports, "final": n == ROUNDS - 1}
         try:
-            print("  reported:", call("POST", "/api/servers/report", json.dumps({"reports": reports}).encode(), signed=True).decode())
+            print("  reported:", call("POST", "/api/servers/report", json.dumps(body).encode(), signed=True).decode())
         except Exception as err:  # one failed post shouldn't end the run, but don't draw from old data
             print("  report failed:", err, file=sys.stderr)
             continue
