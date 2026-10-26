@@ -22,7 +22,7 @@ concurrency:
 jobs:
   track:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 75   # a few minutes of checks, plus up to an hour more while GitHub refuses the hand-off
     steps:
       - uses: actions/checkout@v4
 
@@ -67,29 +67,41 @@ jobs:
       # the concurrency group (a newer one replaces an older waiting one), so there is never a second
       # chain. (Skipping when "a run is already waiting" broke the chain on 2026-10-19 and 10-21: the
       # run GitHub listed as waiting never ran, and checks stopped for 4 hours, until the schedule.)
-      # Then make sure GitHub really queued the new run, and try again if not. After a failure, wait
-      # first, so a broken check retries every 5 minutes rather than every few seconds. To stop the
-      # tracker, disable this workflow in the Actions tab.
+      # Then make sure GitHub really queued the new run, and try again if not. When GitHub refuses
+      # (2026-10-26: its API answered 500/502 for minutes, all four tries then made inside a minute
+      # failed, and the checks stopped for 5 1/2 hours, until the schedule), check the servers again
+      # meanwhile, so the site doesn't go stale, and keep asking for up to an hour. After a failed
+      # check, wait first, so a broken check retries every 5 minutes rather than every few seconds.
+      # To stop the tracker, disable this workflow in the Actions tab; a run that finds it disabled
+      # stops asking.
       - name: Start the next check
         if: always() && github.ref == 'refs/heads/master'
-        timeout-minutes: 8
+        timeout-minutes: 62
+        working-directory: server-tracker
         env:
           GH_TOKEN: ${{ github.token }}
           FAILED: ${{ job.status == 'failure' }}
+          FONTS_DIR: ${{ github.workspace }}/fonts
         run: |
           if [ "$FAILED" = "true" ]; then sleep 240; fi
-          since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          for try in 1 2 3 4; do
+          # how many runs a dispatch started since $1, not counting this one (nothing when GitHub won't say)
+          queued_since() {
+            gh run list -R "$GITHUB_REPOSITORY" --workflow server-tracker.yml --event workflow_dispatch --limit 5 \
+              --json databaseId,createdAt --jq "[.[] | select(.createdAt >= \"$1\" and .databaseId != $GITHUB_RUN_ID)] | length" \
+              2>/dev/null || true
+          }
+          for try in $(seq 1 12); do
+            since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
             if gh workflow run server-tracker.yml -R "$GITHUB_REPOSITORY" --ref master; then
               for look in 1 2 3; do
                 sleep 10
-                queued=$(gh run list -R "$GITHUB_REPOSITORY" --workflow server-tracker.yml --event workflow_dispatch \
-                  --limit 5 --json databaseId,createdAt \
-                  --jq "[.[] | select(.createdAt >= \"$since\" and .databaseId != $GITHUB_RUN_ID)] | length")
-                if [ "${queued:-0}" -gt 0 ]; then echo "The next check is queued."; exit 0; fi
+                if [ "$(queued_since "$since")" -gt 0 ] 2>/dev/null; then echo "The next check is queued."; exit 0; fi
               done
               echo "GitHub took the request but no new run showed up; asking again."
             fi
-            sleep 15
+            state=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/server-tracker.yml" --jq .state 2>/dev/null || true)
+            if [ "${state#disabled}" != "$state" ]; then echo "The tracker is switched off ($state): no next check."; exit 0; fi
+            echo "Checking the servers again meanwhile (try $try of 12)."
+            python tracker.py || sleep 60
           done
           exit 1
