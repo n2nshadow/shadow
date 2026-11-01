@@ -11,7 +11,7 @@
   widget    260 x 660  -- a picture of the website widget, for forums
 
 Polished rather than a wall of numbers: the map's picture, the server's name, one big player count and a
-smooth 24-hour line, in the website's colours and fonts (Big Shoulders Display, Barlow, JetBrains Mono --
+smooth 24-hour line, in the website's colours and fonts (Space Grotesk, DM Sans, IBM Plex Mono --
 the workflow fetches them from Google Fonts' repo; FONTS_DIR points at them, DejaVu stands in if missing).
 Everything is drawn at 4x and scaled down, so edges, curves and text come out smooth.
 """
@@ -24,10 +24,11 @@ from datetime import datetime, timezone
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 K = 4  # supersampling
-BG_TOP, BG_BOTTOM = (31, 32, 26), (19, 20, 16)
-BONE, MUTED, FAINT = (240, 234, 218), (168, 163, 142), (104, 101, 86)
-AMBER, AMBER_HI = (233, 162, 59), (255, 196, 102)
-GREEN, RED, GREY = (110, 222, 120), (232, 96, 80), (150, 146, 128)
+GROUND = (10, 16, 21)
+BG_TOP, BG_BOTTOM = (17, 26, 33), GROUND
+BONE, MUTED, FAINT = (237, 242, 245), (166, 181, 192), (139, 156, 168)
+ACCENT, ACCENT_HI = (142, 232, 229), (180, 246, 241)
+GREEN, RED, GREY = (110, 222, 120), (232, 96, 80), (139, 156, 168)
 UA = "dutymapper-server-tracker (+https://github.com/n2nshadow/shadow)"
 FONTS = os.environ.get("FONTS_DIR", "fonts")
 FALLBACK = os.environ.get("FONT_FALLBACK", "DejaVuSans.ttf")
@@ -35,16 +36,17 @@ _fonts = {}
 
 
 def font(kind, size):
-    """display = Big Shoulders 800, body = Barlow SemiBold, mono = JetBrains Mono 600; size in final pixels."""
+    """Atlas type: Space Grotesk 600, DM Sans 500, IBM Plex Mono 500; size in final pixels."""
     key = (kind, size)
     if key not in _fonts:
-        name, weight = {"display": ("BigShouldersDisplay.ttf", 800), "body": ("Barlow-SemiBold.ttf", None),
-                        "mono": ("JetBrainsMono.ttf", 600)}[kind]
+        name, axes = {"display": ("SpaceGrotesk.ttf", [600]),
+                      "body": ("DMSans.ttf", [max(9, min(40, size)), 500]),
+                      "mono": ("IBMPlexMono-Medium.ttf", None)}[kind]
         try:
             f = ImageFont.truetype(os.path.join(FONTS, name), round(size * K))
-            if weight:
+            if axes:
                 try:
-                    f.set_variation_by_axes([weight])
+                    f.set_variation_by_axes(axes)
                 except Exception:
                     pass
         except OSError:
@@ -87,7 +89,7 @@ class Card:
     """A canvas at K times the final size with the few drawing tools the banners need."""
 
     def __init__(self, w, h, radius):
-        self.w, self.h, self.r = w, h, radius
+        self.w, self.h, self.r = w, h, min(radius, 5)
         self.im = Image.new("RGBA", (w * K, h * K), (0, 0, 0, 0))
         # background: a soft vertical gradient
         grad = Image.new("RGB", (1, h * K))
@@ -132,7 +134,7 @@ class Card:
     def chip(self, x, y, w, h):
         """A small dark glass square, for the logo on top of a picture."""
         glass = Image.new("RGBA", self.im.size, (0, 0, 0, 0))
-        ImageDraw.Draw(glass).rounded_rectangle((x * K, y * K, (x + w) * K, (y + h) * K), radius=4 * K, fill=(10, 10, 8, 165), outline=(255, 255, 255, 34), width=K)
+        ImageDraw.Draw(glass).rounded_rectangle((x * K, y * K, (x + w) * K, (y + h) * K), radius=4 * K, fill=GROUND + (165,), outline=(255, 255, 255, 34), width=K)
         self.im.alpha_composite(glass)
 
     def fade(self, x, y, w, h, start, end, colour, horizontal=False):
@@ -153,7 +155,7 @@ class Card:
         w, h = tw + 19, 13
         glass = Image.new("RGBA", self.im.size, (0, 0, 0, 0))
         gd = ImageDraw.Draw(glass)
-        gd.rounded_rectangle(((x) * K, y * K, (x + w) * K, (y + h) * K), radius=h / 2 * K, fill=(10, 10, 8, 175), outline=(255, 255, 255, 38), width=K)
+        gd.rounded_rectangle(((x) * K, y * K, (x + w) * K, (y + h) * K), radius=h / 2 * K, fill=GROUND + (175,), outline=(255, 255, 255, 38), width=K)
         if live:  # glow
             glow = Image.new("RGBA", self.im.size, (0, 0, 0, 0))
             ImageDraw.Draw(glow).ellipse(((x + 4) * K, (y + 3.5) * K, (x + 10) * K, (y + 9.5) * K), fill=colour + (200,))
@@ -164,7 +166,7 @@ class Card:
         return w
 
     def sparkline(self, box, history, live):
-        """A smooth line of people playing over 24 h, with a soft amber fill underneath."""
+        """A smooth line of people playing over 24 h, with a soft accent fill underneath."""
         x0, y0, x1, y1 = box
         bins = 48
         now = datetime.now(timezone.utc).timestamp()
@@ -197,10 +199,10 @@ class Card:
                 curve.append(tuple(0.5 * ((2 * p1[k]) + (-p0[k] + p2[k]) * t + (2 * p0[k] - 5 * p1[k] + 4 * p2[k] - p3[k]) * t2 + (-p0[k] + 3 * p1[k] - 3 * p2[k] + p3[k]) * t3) for k in (0, 1)))
         curve.append(pts[-1])
         curve = [(cx, min(y1 - 0.5, max(y0, cy))) for cx, cy in curve]
-        # fill: amber fading down to nothing, masked to the area under the curve
+        # fill: accent fading down to nothing, masked to the area under the curve
         mask = Image.new("L", self.im.size, 0)
         ImageDraw.Draw(mask).polygon([(curve[0][0] * K, y1 * K)] + [(cx * K, cy * K) for cx, cy in curve] + [(curve[-1][0] * K, y1 * K)], fill=255)
-        fill = Image.new("RGBA", self.im.size, AMBER + (0,))
+        fill = Image.new("RGBA", self.im.size, ACCENT + (0,))
         ramp = Image.new("L", (1, (y1 - y0) * K))
         for i in range((y1 - y0) * K):
             ramp.putpixel((0, i), round(110 * (1 - i / ((y1 - y0) * K)) ** 1.4))
@@ -208,13 +210,13 @@ class Card:
         alpha.paste(ramp.resize(((x1 - x0) * K, (y1 - y0) * K)), (x0 * K, y0 * K))
         fill.putalpha(Image.composite(alpha, Image.new("L", self.im.size, 0), mask))
         self.im.alpha_composite(fill)
-        self.d.line([(cx * K, cy * K) for cx, cy in curve], fill=AMBER + (255,), width=round(1.6 * K), joint="curve")
+        self.d.line([(cx * K, cy * K) for cx, cy in curve], fill=ACCENT + (255,), width=round(1.6 * K), joint="curve")
         if live:  # the latest point, lit
             ex, ey = curve[-1]
             glow = Image.new("RGBA", self.im.size, (0, 0, 0, 0))
-            ImageDraw.Draw(glow).ellipse(((ex - 3) * K, (ey - 3) * K, (ex + 3) * K, (ey + 3) * K), fill=AMBER_HI + (190,))
+            ImageDraw.Draw(glow).ellipse(((ex - 3) * K, (ey - 3) * K, (ex + 3) * K, (ey + 3) * K), fill=ACCENT_HI + (190,))
             self.im.alpha_composite(glow.filter(ImageFilter.GaussianBlur(2 * K)))
-            self.d.ellipse(((ex - 1.6) * K, (ey - 1.6) * K, (ex + 1.6) * K, (ey + 1.6) * K), fill=AMBER_HI + (255,))
+            self.d.ellipse(((ex - 1.6) * K, (ey - 1.6) * K, (ex + 1.6) * K, (ey + 1.6) * K), fill=ACCENT_HI + (255,))
 
     def finish(self):
         """Rounds the corners, adds a hairline edge, and scales down to the real size."""
@@ -249,24 +251,23 @@ def fit(card, text, kind, sizes, width, lines=1):
             out.append(cur)
         if len(out) <= lines and all(card.width(l, kind, size) <= width for l in out):
             return size, out
+    # Keep the available lines when a long name still needs an ellipsis at the smallest size.
     size = sizes[-1]
-    s = text
-    while s and card.width(s + "…", kind, size) > width:
-        s = s[:-1]
-    return size, [s + "…" if s != text else s]
+    visible = out[:max(0, lines - 1)] + [" ".join(out[max(0, lines - 1):])]
+    return size, [clip(card, line, kind, size, width) for line in visible]
 
 
 def tall(data, site):
     W, H = 160, 248
     c = Card(W, H, 12)
-    name = plain(data.get("hostname") or data.get("name") or "").upper()
+    name = plain(data.get("hostname") or data.get("name") or "")
     label, colour, live = status(data)
     # the map's whole picture across the top (cards are 16:10 and often carry their own title, so
     # nothing is cropped), dissolving into the card
     pic = picture(data.get("map_image") or site + "/static/art/servers_bunker.jpg", W, 100)
     if pic:
         c.paste_fading(pic, 0, 0, 0.42)
-    c.fade(0, 0, W, 30, 110, 0, (8, 8, 6))           # a little darker under the pill
+    c.fade(0, 0, W, 30, 110, 0, GROUND)           # a little darker under the pill
     # top right: map cards usually carry their title at the top left
     c.pill(W - 9 - (c.width(label, "body", 7.5, tracking=1.1) + 19), 9, label, colour, live)
     # name, over the fade
@@ -283,26 +284,27 @@ def tall(data, site):
     # the one number that matters
     if live:
         num = str(data.get("players", 0))
-        nw = c.text(10, 172, num, "display", 42, AMBER, anchor="ls")
+        nw = c.text(10, 172, num, "display", 42, ACCENT, anchor="ls")
         c.text(10 + nw + 6, 157, f"of {data.get('max_players', 0)} playing", "body", 9, BONE)
         if data.get("bots"):
             c.text(10 + nw + 6, 169, f"+{data['bots']} bots", "body", 8, MUTED)
     else:
-        c.text(10, 170, "Offline" if label == "OFFLINE" else "No data yet", "display", 26, MUTED, anchor="ls")
+        size, lines = fit(c, "Offline" if label == "OFFLINE" else "No data yet", "display", [26, 24, 22], W - 20)
+        c.text(10, 170, lines[0], "display", size, MUTED, anchor="ls")
     # the last 24 hours
     c.text(10, 185, "LAST 24 HOURS", "body", 6.5, FAINT, tracking=1.2)
     c.sparkline((10, 195, W - 10, 222), data.get("history") or [], live)
     # footer: address and where it's from
     c.d.line((10 * K, 230 * K, (W - 10) * K, 230 * K), fill=(255, 255, 255, 22), width=K)
-    c.text(10, 240, data.get("address", ""), "mono", 7.5, BONE, anchor="lm")
-    c.text(W - 10, 240, "DUTYMAPPER", "display", 9, AMBER, anchor="rm", tracking=0.6)
+    c.text(10, 240, data.get("address", ""), "mono", 6.5, BONE, anchor="lm")
+    c.text(W - 10, 240, "DUTYMAPPER", "display", 7.5, ACCENT, anchor="rm", tracking=0.6)
     return c.finish()
 
 
 def wide(data, site):
     W, H = 560, 95
     c = Card(W, H, 12)
-    name = plain(data.get("hostname") or data.get("name") or "").upper()
+    name = plain(data.get("hostname") or data.get("name") or "")
     label, colour, live = status(data)
     # the map's whole picture on the left (16:10 at full height), dissolving into the card
     pw = 152
@@ -314,7 +316,7 @@ def wide(data, site):
     c.pill(pw - 8 - (c.width(label, "body", 7.5, tracking=1.1) + 19), 8, label, colour, live)
     # name and details
     x = 166
-    size, lines = fit(c, name, "display", [30, 28, 26, 24, 22, 20, 18], 230, 1)
+    size, lines = fit(c, name, "display", [30, 28, 26, 24, 22, 20, 18, 16], 230, 1)
     c.text(x, 42, lines[0], "display", size, BONE, anchor="ls")
     mp = data.get("map_name") or data.get("map") or ""
     gt = data.get("gametype_name") or ""
@@ -328,12 +330,13 @@ def wide(data, site):
     c.d.line(((rx - 14) * K, 14 * K, (rx - 14) * K, (H - 14) * K), fill=(255, 255, 255, 22), width=K)
     if live:
         num = str(data.get("players", 0))
-        nw = c.text(rx, 46, num, "display", 38, AMBER, anchor="ls")
+        nw = c.text(rx, 46, num, "display", 38, ACCENT, anchor="ls")
         c.text(rx + nw + 6, 30, f"of {data.get('max_players', 0)} playing", "body", 9.5, BONE)
         if data.get("bots"):
             c.text(rx + nw + 6, 42, f"+{data['bots']} bots", "body", 8.5, MUTED)
     else:
-        c.text(rx, 44, "Offline" if label == "OFFLINE" else "No data yet", "display", 26, MUTED, anchor="ls")
+        size, lines = fit(c, "Offline" if label == "OFFLINE" else "No data yet", "display", [26, 24, 22, 20], W - rx - 14)
+        c.text(rx, 44, lines[0], "display", size, MUTED, anchor="ls")
     c.text(rx, 56, "LAST 24 HOURS", "body", 6.5, FAINT, tracking=1.2)
     c.sparkline((rx, 67, W - 14, 85), data.get("history") or [], live)
     return c.finish()
@@ -388,7 +391,7 @@ def player_list(c, data, x, y, width, rows, columns=1, gap=10, row_h=14, fs=1.0)
 def count_block(c, data, x, baseline, live, label, size=44):
     if live:
         num = str(data.get("players", 0))
-        nw = c.text(x, baseline, num, "display", size, AMBER, anchor="ls")
+        nw = c.text(x, baseline, num, "display", size, ACCENT, anchor="ls")
         c.text(x + nw + 7, baseline - size * 0.36, f"of {data.get('max_players', 0)} playing", "body", 9.5, BONE)
         if data.get("bots"):
             c.text(x + nw + 7, baseline - size * 0.36 + 13, f"+{data['bots']} bots", "body", 8.5, MUTED)
@@ -400,13 +403,13 @@ def large(data, site):
     """560 x 250: the wide strip made taller, with everyone who's on listed."""
     W, H = 560, 250
     c = Card(W, H, 14)
-    name = plain(data.get("hostname") or data.get("name") or "").upper()
+    name = plain(data.get("hostname") or data.get("name") or "")
     label, colour, live = status(data)
     lw = 222
     pic = picture(data.get("map_image") or site + "/static/art/servers_bunker.jpg", lw, round(lw / 1.6))
     if pic:
         c.paste_fading(pic, 0, 0, 0.5)
-    c.fade(0, 0, lw, 30, 110, 0, (8, 8, 6))
+    c.fade(0, 0, lw, 30, 110, 0, GROUND)
     c.pill(lw - 9 - (c.width(label, "body", 7.5, tracking=1.1) + 19), 9, label, colour, live)
     count_block(c, data, 14, 186, live, label, 46)
     c.text(14, 200, "LAST 24 HOURS", "body", 6.5, FAINT, tracking=1.2)
@@ -425,7 +428,7 @@ def large(data, site):
     y = y - size * 0.92 + 9
     c.text(x, y, mline[0], "body", 11, MUTED)
     c.text(x, y + 22, data.get("address", ""), "mono", 9.5, BONE, anchor="lm")
-    c.text(W - 14, y + 22, "DUTYMAPPER", "display", 10, AMBER, anchor="rm", tracking=0.6)
+    c.text(W - 14, y + 22, "DUTYMAPPER", "display", 10, ACCENT, anchor="rm", tracking=0.6)
     ly = y + 38
     n = len(data.get("online_players") or [])
     c.text(x, ly, f"ONLINE NOW · {n}" if live else "ONLINE NOW", "body", 6.5, FAINT, tracking=1.2)
@@ -438,12 +441,12 @@ def sidebar(data, site):
     """240 x 440: the tall card made bigger, with the player list underneath."""
     W, H = 240, 440
     c = Card(W, H, 14)
-    name = plain(data.get("hostname") or data.get("name") or "").upper()
+    name = plain(data.get("hostname") or data.get("name") or "")
     label, colour, live = status(data)
     pic = picture(data.get("map_image") or site + "/static/art/servers_bunker.jpg", W, 150)
     if pic:
         c.paste_fading(pic, 0, 0, 0.42)
-    c.fade(0, 0, W, 30, 110, 0, (8, 8, 6))
+    c.fade(0, 0, W, 30, 110, 0, GROUND)
     c.pill(W - 10 - (c.width(label, "body", 7.5, tracking=1.1) + 19), 10, label, colour, live)
     size, lines = fit(c, name, "display", [30, 28, 26, 24, 22, 20, 18], W - 24, 2)
     y = 150 - (len(lines) - 1) * size * 0.92
@@ -462,7 +465,7 @@ def sidebar(data, site):
     player_list(c, data, 10, 293, W - 20, 8)
     c.d.line((12 * K, (H - 24) * K, (W - 12) * K, (H - 24) * K), fill=(255, 255, 255, 22), width=K)
     c.text(12, H - 12, data.get("address", ""), "mono", 8.5, BONE, anchor="lm")
-    c.text(W - 12, H - 12, "DUTYMAPPER", "display", 10, AMBER, anchor="rm", tracking=0.6)
+    c.text(W - 12, H - 12, "DUTYMAPPER", "display", 10, ACCENT, anchor="rm", tracking=0.6)
     return c.finish()
 
 
@@ -482,8 +485,8 @@ def micro(data, site):
     glow_dot(c, 9, H / 2, 2.6, colour, live)
     count = f"{data.get('players', 0)}/{data.get('max_players', 0)}" if live else ("OFF" if label == "OFFLINE" else "—")
     cw = c.width(count, "display", 13)
-    c.text(W - 8, H / 2 + 0.5, count, "display", 13, AMBER if live else MUTED, anchor="rm")
-    name = clip(c, plain(data.get("hostname") or data.get("name") or "").upper(), "display", 12.5, 170)
+    c.text(W - 8, H / 2 + 0.5, count, "display", 13, ACCENT if live else MUTED, anchor="rm")
+    name = clip(c, plain(data.get("hostname") or data.get("name") or ""), "display", 12.5, 170)
     nw = c.text(17, H / 2 + 0.5, name, "display", 12.5, BONE, anchor="lm")
     mp = clip(c, data.get("map_name") or data.get("map") or "", "body", 8.5, W - 8 - cw - 10 - (17 + nw + 12))
     c.text(W - 8 - cw - 9, H / 2 + 0.5, mp, "body", 8.5, MUTED, anchor="rm")
@@ -500,7 +503,7 @@ def small(data, site):
     if pic:
         c.paste_fading(pic, 0, 0, 0.45, horizontal=True)
     x = 104
-    name = plain(data.get("hostname") or data.get("name") or "").upper()
+    name = plain(data.get("hostname") or data.get("name") or "")
     size, lines = fit(c, name, "display", [21, 20, 19, 18, 17, 16, 15, 14], 228, 1)
     c.text(x, 25, lines[0], "display", size, BONE, anchor="ls")
     mp = data.get("map_name") or data.get("map") or ""
@@ -512,7 +515,7 @@ def small(data, site):
     c.d.line(((rx - 12) * K, 10 * K, (rx - 12) * K, (H - 10) * K), fill=(255, 255, 255, 20), width=K)
     if live:
         num = str(data.get("players", 0))
-        nw = c.text(rx, 30, num, "display", 26, AMBER, anchor="ls")
+        nw = c.text(rx, 30, num, "display", 26, ACCENT, anchor="ls")
         c.text(rx + nw + 5, 15, f"of {data.get('max_players', 0)}", "body", 8.5, BONE)
         c.text(rx + nw + 5, 25, "playing", "body", 7.5, MUTED)
     else:
@@ -525,12 +528,12 @@ def square(data, site):
     """250 x 250: picture, name, count and the day."""
     W, H = 250, 250
     c = Card(W, H, 14)
-    name = plain(data.get("hostname") or data.get("name") or "").upper()
+    name = plain(data.get("hostname") or data.get("name") or "")
     label, colour, live = status(data)
     pic = picture(data.get("map_image") or site + "/static/art/servers_bunker.jpg", W, 156)
     if pic:
         c.paste_fading(pic, 0, 0, 0.42)
-    c.fade(0, 0, W, 30, 110, 0, (8, 8, 6))
+    c.fade(0, 0, W, 30, 110, 0, GROUND)
     c.pill(W - 10 - (c.width(label, "body", 7.5, tracking=1.1) + 19), 10, label, colour, live)
     size, lines = fit(c, name, "display", [28, 26, 24, 22, 20, 18, 16], W - 24, 2)
     y = 132 - (len(lines) - 1) * size * 0.92
@@ -544,7 +547,7 @@ def square(data, site):
     c.sparkline((12, 202, W - 12, 226), data.get("history") or [], live)
     c.d.line((12 * K, 233 * K, (W - 12) * K, 233 * K), fill=(255, 255, 255, 22), width=K)
     c.text(12, 242, data.get("address", ""), "mono", 7.5, BONE, anchor="lm")
-    c.text(W - 12, 242, "DUTYMAPPER", "display", 9, AMBER, anchor="rm", tracking=0.6)
+    c.text(W - 12, 242, "DUTYMAPPER", "display", 9, ACCENT, anchor="rm", tracking=0.6)
     return c.finish()
 
 
@@ -560,7 +563,7 @@ def top_list(c, data, x, y, width, rows, row_h=14, fs=1.0):
             band = Image.new("RGBA", c.im.size, (0, 0, 0, 0))
             ImageDraw.Draw(band).rounded_rectangle((x * K, py * K, (x + width) * K, (py + row_h - 1) * K), radius=3 * K, fill=(255, 255, 255, 9))
             c.im.alpha_composite(band)
-        c.text(x + 6, py + row_h / 2, str(i + 1), "mono", 7.5 * fs, AMBER if i < 3 else FAINT, anchor="lm")
+        c.text(x + 6, py + row_h / 2, str(i + 1), "mono", 7.5 * fs, ACCENT if i < 3 else FAINT, anchor="lm")
         score = f"{p.get('score', 0):,}"
         hrs = (p.get("seconds") or 0) / 3600
         when = f"{hrs:.0f}h" if hrs >= 1 else f"{max(1, round(hrs * 60))}m"
@@ -576,13 +579,13 @@ def showcase(data, site):
     """760 x 340: everything -- picture, count, a bigger day graph, who's on and the top players."""
     W, H = 760, 340
     c = Card(W, H, 16)
-    name = plain(data.get("hostname") or data.get("name") or "").upper()
+    name = plain(data.get("hostname") or data.get("name") or "")
     label, colour, live = status(data)
     lw = 300
     pic = picture(data.get("map_image") or site + "/static/art/servers_bunker.jpg", lw, round(lw / 1.6))
     if pic:
         c.paste_fading(pic, 0, 0, 0.5)
-    c.fade(0, 0, lw, 32, 110, 0, (8, 8, 6))
+    c.fade(0, 0, lw, 32, 110, 0, GROUND)
     c.pill(lw - 11 - (c.width(label, "body", 7.5, tracking=1.1) + 19), 11, label, colour, live)
     count_block(c, data, 16, 236, live, label, 56)
     c.text(16, 256, "LAST 24 HOURS", "body", 6.5, FAINT, tracking=1.2)
@@ -597,7 +600,7 @@ def showcase(data, site):
     gt = data.get("gametype_name") or ""
     c.text(x, 59, clip(c, f"{mp}  ·  {gt}" if gt else mp, "body", 12, W - x - 18), "body", 12, MUTED)
     c.text(x, 90, data.get("address", ""), "mono", 10, BONE, anchor="lm")
-    c.text(W - 18, 90, "DUTYMAPPER.COM", "display", 11, AMBER, anchor="rm", tracking=0.8)
+    c.text(W - 18, 90, "DUTYMAPPER.COM", "display", 11, ACCENT, anchor="rm", tracking=0.8)
     c.d.line((x * K, 104 * K, (W - 18) * K, 104 * K), fill=(255, 255, 255, 20), width=K)
     colw = (W - x - 18 - 16) / 2
     n = len(data.get("online_players") or [])
@@ -613,12 +616,12 @@ def widget(data, site):
     """260 x 660: a picture of the website widget, for forums (they don't run live widgets)."""
     W, H = 260, 660
     c = Card(W, H, 14)
-    name = plain(data.get("hostname") or data.get("name") or "").upper()
+    name = plain(data.get("hostname") or data.get("name") or "")
     label, colour, live = status(data)
     pic = picture(data.get("map_image") or site + "/static/art/servers_bunker.jpg", W, 162)
     if pic:
         c.paste_fading(pic, 0, 0, 0.42)
-    c.fade(0, 0, W, 30, 110, 0, (8, 8, 6))
+    c.fade(0, 0, W, 30, 110, 0, GROUND)
     c.pill(W - 10 - (c.width(label, "body", 7.5, tracking=1.1) + 19), 10, label, colour, live)
     size, lines = fit(c, name, "display", [28, 26, 24, 22, 20, 18], W - 28, 2)
     y = 150 - (len(lines) - 1) * size * 0.93
@@ -641,7 +644,7 @@ def widget(data, site):
     top_list(c, data, 12, 488, W - 24, 5, row_h=18, fs=1.25)
     c.d.line((14 * K, (H - 32) * K, (W - 14) * K, (H - 32) * K), fill=(255, 255, 255, 22), width=K)
     c.text(14, H - 16, data.get("address", ""), "mono", 10, BONE, anchor="lm")
-    c.text(W - 14, H - 16, "DUTYMAPPER", "display", 13, AMBER, anchor="rm", tracking=0.8)
+    c.text(W - 14, H - 16, "DUTYMAPPER", "display", 13, ACCENT, anchor="rm", tracking=0.8)
     return c.finish()
 
 
@@ -657,3 +660,4 @@ def draw_all(data, site):
         fn(data, site).save(buf, "PNG", optimize=True)
         out[kind] = buf.getvalue()
     return out
+

@@ -37,9 +37,9 @@ jobs:
           pip install --quiet "pillow==11.3.0"
           mkdir -p fonts
           base="https://raw.githubusercontent.com/google/fonts/1d0e46c7933245c8180fe83e47917961c913bbdb/ofl"
-          curl -fsSL -o fonts/BigShouldersDisplay.ttf "$base/bigshouldersdisplay/BigShouldersDisplay%5Bwght%5D.ttf"
-          curl -fsSL -o fonts/Barlow-SemiBold.ttf "$base/barlow/Barlow-SemiBold.ttf"
-          curl -fsSL -o fonts/JetBrainsMono.ttf "$base/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf"
+          curl -fsSL -o fonts/SpaceGrotesk.ttf "$base/spacegrotesk/SpaceGrotesk%5Bwght%5D.ttf"
+          curl -fsSL -o fonts/DMSans.ttf "$base/dmsans/DMSans%5Bopsz%2Cwght%5D.ttf"
+          curl -fsSL -o fonts/IBMPlexMono-Medium.ttf "$base/ibmplexmono/IBMPlexMono-Medium.ttf"
 
       - name: Check the servers and send the reports
         timeout-minutes: 7   # 4 checks a minute apart, then the banners
@@ -105,3 +105,4 @@ jobs:
             python tracker.py || sleep 60
           done
           exit 1
+

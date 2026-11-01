@@ -31,6 +31,7 @@ SITE = os.environ.get("DUTYMAPPER_URL", "https://dutymapper.com").rstrip("/")
 ROUNDS = int(os.environ.get("ROUNDS", "4"))
 GAP = int(os.environ.get("GAP", "60"))
 REFRESH = int(os.environ.get("REFRESH", "600"))
+BANNER_STYLE = "atlas-v1"  # redraw stored banners once when the visual theme changes
 DRY = "--dry-run" in sys.argv
 UA = "dutymapper-server-tracker (+https://github.com/n2nshadow/shadow)"
 PLAYER = re.compile(rb'^(-?\d+) (-?\d+) "(.*)"$')
@@ -107,9 +108,9 @@ def call(method, path, body=None, content_type="application/json", signed=False)
 def looks(rep):
     """What a server's banners show: (map, mode, name -- or offline) and (player counts)."""
     if not rep["online"]:
-        return "offline", ""
+        return f"{BANNER_STYLE}|offline", ""
     i = rep["info"]
-    return f"{i.get('mapname', '')}|{i.get('g_gametype', '')}|{i.get('sv_hostname', '')}", f"{len(rep['players'])}|{i.get('g_humanplayers', '')}"
+    return f"{BANNER_STYLE}|{i.get('mapname', '')}|{i.get('g_gametype', '')}|{i.get('sv_hostname', '')}", f"{len(rep['players'])}|{i.get('g_humanplayers', '')}"
 
 
 def stamp(iso):
@@ -184,3 +185,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
