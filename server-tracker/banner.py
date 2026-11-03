@@ -20,14 +20,17 @@ import os
 import re
 import urllib.request
 from datetime import datetime, timezone
+from functools import lru_cache
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 K = 4  # supersampling
-GROUND = (10, 16, 21)
-BG_TOP, BG_BOTTOM = (17, 26, 33), GROUND
-BONE, MUTED, FAINT = (237, 242, 245), (166, 181, 192), (139, 156, 168)
-ACCENT, ACCENT_HI = (142, 232, 229), (180, 246, 241)
+GROUND = (7, 23, 27)
+BG_TOP, BG_BOTTOM = (15, 43, 47), GROUND
+PAPER, INK, TEAL = (239, 238, 232), (23, 40, 45), (23, 79, 81)
+PAPER_MUTED = (66, 91, 91)
+BONE, MUTED, FAINT = PAPER, (177, 203, 198), (148, 177, 171)
+ACCENT, ACCENT_HI = (168, 232, 219), (206, 248, 235)
 GREEN, RED, GREY = (110, 222, 120), (232, 96, 80), (139, 156, 168)
 UA = "dutymapper-server-tracker (+https://github.com/n2nshadow/shadow)"
 FONTS = os.environ.get("FONTS_DIR", "fonts")
@@ -36,7 +39,7 @@ _fonts = {}
 
 
 def font(kind, size):
-    """Atlas type: Space Grotesk 600, DM Sans 500, IBM Plex Mono 500; size in final pixels."""
+    """Studio type: Space Grotesk 600, DM Sans 500, IBM Plex Mono 500; size in final pixels."""
     key = (kind, size)
     if key not in _fonts:
         name, axes = {"display": ("SpaceGrotesk.ttf", [600]),
@@ -55,6 +58,7 @@ def font(kind, size):
     return _fonts[key]
 
 
+@lru_cache(maxsize=16)
 def fetch(url):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=20) as r:
@@ -89,7 +93,7 @@ class Card:
     """A canvas at K times the final size with the few drawing tools the banners need."""
 
     def __init__(self, w, h, radius):
-        self.w, self.h, self.r = w, h, min(radius, 5)
+        self.w, self.h, self.r = w, h, min(radius, 3)
         self.im = Image.new("RGBA", (w * K, h * K), (0, 0, 0, 0))
         # background: a soft vertical gradient
         grad = Image.new("RGB", (1, h * K))
@@ -98,8 +102,33 @@ class Card:
             grad.putpixel((0, y), tuple(round(BG_TOP[i] + (BG_BOTTOM[i] - BG_TOP[i]) * t) for i in range(3)))
         self.im.paste(grad.resize((w * K, h * K)), (0, 0))
         self.d = ImageDraw.Draw(self.im)
+        self.panels = []
+
+    def paper(self, x, y, w, h, colour=PAPER):
+        """Crisp ivory name panel shared with the website gallery."""
+        self.d.rectangle((x * K, y * K, (x + w) * K, (y + h) * K), fill=colour + (255,))
+        self.panels.append((x, y, x + w, y + h, colour != GROUND))
+
+    def light_at(self, x, y):
+        for x0, y0, x1, y1, light in reversed(self.panels):
+            if x0 <= x <= x1 and y0 <= y <= y1:
+                return light
+        return False
+
+    def brand(self, site, x, y, label, size, tracking=0.6):
+        """The same DutyMapper emblem, in the panel's matching ink or ivory."""
+        colour = TEAL if self.light_at(x, y) else ACCENT
+        logo_size = max(9, round(size * 1.2))
+        mark = emblem(site, logo_size)
+        if mark is not None:
+            tinted = Image.new("RGBA", mark.size, colour + (255,))
+            tinted.putalpha(mark.getchannel("A"))
+            self.paste(tinted, x - self.width(label, "display", size, tracking) - logo_size - 4, y - logo_size / 2)
+        self.text(x, y, label, "display", size, colour, anchor="rm", tracking=tracking)
 
     def text(self, x, y, s, kind, size, fill, anchor="la", tracking=0):
+        if self.light_at(x, y):
+            fill = {BONE: INK, MUTED: PAPER_MUTED, FAINT: PAPER_MUTED, ACCENT: TEAL}.get(fill, fill)
         f = font(kind, size)
         if not tracking:
             self.d.text((x * K, y * K), s, font=f, fill=fill, anchor=anchor)
@@ -271,16 +300,17 @@ def tall(data, site):
     # top right: map cards usually carry their title at the top left
     c.pill(W - 9 - (c.width(label, "body", 7.5, tracking=1.1) + 19), 9, label, colour, live)
     # name, over the fade
+    c.paper(0, 76, W, 65)
     size, lines = fit(c, name, "display", [24, 22, 20, 18, 16, 14], W - 20, 2)
     y = 116 - (len(lines) - 1) * size * 0.92
     for ln in lines:
-        c.text(10, y, ln, "display", size, BONE, anchor="ls")
+        c.text(10, y, ln, "display", size, INK, anchor="ls")
         y += size * 0.92
     # map and mode
     mp = data.get("map_name") or data.get("map") or ""
     gt = data.get("gametype_name") or ""
     _, mline = fit(c, f"{mp}  ·  {gt}" if gt else mp, "body", [9], W - 20, 1)
-    c.text(10, 123, mline[0], "body", 9, MUTED)
+    c.text(10, 123, mline[0], "body", 9, PAPER_MUTED)
     # the one number that matters
     if live:
         num = str(data.get("players", 0))
@@ -297,7 +327,7 @@ def tall(data, site):
     # footer: address and where it's from
     c.d.line((10 * K, 230 * K, (W - 10) * K, 230 * K), fill=(255, 255, 255, 22), width=K)
     c.text(10, 240, data.get("address", ""), "mono", 6.5, BONE, anchor="lm")
-    c.text(W - 10, 240, "DUTYMAPPER", "display", 7.5, ACCENT, anchor="rm", tracking=0.6)
+    c.brand(site, W - 10, 240, "DUTYMAPPER", 7.5, tracking=0.6)
     return c.finish()
 
 
@@ -315,16 +345,17 @@ def wide(data, site):
     # in their left corners)
     c.pill(pw - 8 - (c.width(label, "body", 7.5, tracking=1.1) + 19), 8, label, colour, live)
     # name and details
+    c.paper(152, 0, 252, H)
     x = 166
     size, lines = fit(c, name, "display", [30, 28, 26, 24, 22, 20, 18, 16], 230, 1)
-    c.text(x, 42, lines[0], "display", size, BONE, anchor="ls")
+    c.text(x, 42, lines[0], "display", size, INK, anchor="ls")
     mp = data.get("map_name") or data.get("map") or ""
     gt = data.get("gametype_name") or ""
     _, mline = fit(c, f"{mp}  ·  {gt}" if gt else mp, "body", [11], 230, 1)
-    c.text(x, 50, mline[0], "body", 11, MUTED)
-    c.text(x, 76, data.get("address", ""), "mono", 9.5, BONE, anchor="lm")
+    c.text(x, 50, mline[0], "body", 11, PAPER_MUTED)
+    c.text(x, 76, data.get("address", ""), "mono", 9.5, INK, anchor="lm")
     aw = c.width(data.get("address", ""), "mono", 9.5)
-    c.text(x + aw + 10, 76, "DUTYMAPPER.COM", "body", 7, FAINT, anchor="lm", tracking=1.2)
+    c.text(x + aw + 10, 76, "DUTYMAPPER.COM", "body", 7, PAPER_MUTED, anchor="lm", tracking=1.2)
     # the count and the day
     rx = 418
     c.d.line(((rx - 14) * K, 14 * K, (rx - 14) * K, (H - 14) * K), fill=(255, 255, 255, 22), width=K)
@@ -370,7 +401,7 @@ def player_list(c, data, x, y, width, rows, columns=1, gap=10, row_h=14, fs=1.0)
         px, py = x + col * (colw + gap), y + row * row_h
         if row % 2 == 0:
             band = Image.new("RGBA", c.im.size, (0, 0, 0, 0))
-            ImageDraw.Draw(band).rounded_rectangle((px * K, py * K, (px + colw) * K, (py + row_h - 1) * K), radius=3 * K, fill=(255, 255, 255, 9))
+            ImageDraw.Draw(band).rounded_rectangle((px * K, py * K, (px + colw) * K, (py + row_h - 1) * K), radius=3 * K, fill=(INK + (10,)) if c.light_at(x, y) else (255, 255, 255, 9))
             c.im.alpha_composite(band)
         if p is None:
             c.text(px + 6, py + row_h / 2, f"+{more + 1} more", "body", 8 * fs, MUTED, anchor="lm")
@@ -418,17 +449,18 @@ def large(data, site):
     # right: who, where, and who's on
     x = lw + 16
     size, lines = fit(c, name, "display", [30, 28, 26, 24, 22, 20, 18], W - x - 14, 2)
+    c.paper(lw, 0, W - lw, 40 + (len(lines) - 1) * size * 0.92 + 36)
     y = 40
     for ln in lines:
-        c.text(x, y, ln, "display", size, BONE, anchor="ls")
+        c.text(x, y, ln, "display", size, INK, anchor="ls")
         y += size * 0.92
     mp = data.get("map_name") or data.get("map") or ""
     gt = data.get("gametype_name") or ""
     _, mline = fit(c, f"{mp}  ·  {gt}" if gt else mp, "body", [11], W - x - 14, 1)
     y = y - size * 0.92 + 9
-    c.text(x, y, mline[0], "body", 11, MUTED)
-    c.text(x, y + 22, data.get("address", ""), "mono", 9.5, BONE, anchor="lm")
-    c.text(W - 14, y + 22, "DUTYMAPPER", "display", 10, ACCENT, anchor="rm", tracking=0.6)
+    c.text(x, y, mline[0], "body", 11, PAPER_MUTED)
+    c.text(x, y + 22, data.get("address", ""), "mono", 9.5, INK, anchor="lm")
+    c.brand(site, W - 14, y + 22, "DUTYMAPPER", 10, tracking=0.6)
     ly = y + 38
     n = len(data.get("online_players") or [])
     c.text(x, ly, f"ONLINE NOW · {n}" if live else "ONLINE NOW", "body", 6.5, FAINT, tracking=1.2)
@@ -448,15 +480,16 @@ def sidebar(data, site):
         c.paste_fading(pic, 0, 0, 0.42)
     c.fade(0, 0, W, 30, 110, 0, GROUND)
     c.pill(W - 10 - (c.width(label, "body", 7.5, tracking=1.1) + 19), 10, label, colour, live)
+    c.paper(0, 96, W, 87)
     size, lines = fit(c, name, "display", [30, 28, 26, 24, 22, 20, 18], W - 24, 2)
     y = 150 - (len(lines) - 1) * size * 0.92
     for ln in lines:
-        c.text(12, y, ln, "display", size, BONE, anchor="ls")
+        c.text(12, y, ln, "display", size, INK, anchor="ls")
         y += size * 0.92
     mp = data.get("map_name") or data.get("map") or ""
     gt = data.get("gametype_name") or ""
     _, mline = fit(c, f"{mp}  ·  {gt}" if gt else mp, "body", [10], W - 24, 1)
-    c.text(12, 158, mline[0], "body", 10, MUTED)
+    c.text(12, 158, mline[0], "body", 10, PAPER_MUTED)
     count_block(c, data, 12, 216, live, label, 46)
     c.text(12, 230, "LAST 24 HOURS", "body", 6.5, FAINT, tracking=1.2)
     c.sparkline((12, 240, W - 12, 268), data.get("history") or [], live)
@@ -465,7 +498,7 @@ def sidebar(data, site):
     player_list(c, data, 10, 293, W - 20, 8)
     c.d.line((12 * K, (H - 24) * K, (W - 12) * K, (H - 24) * K), fill=(255, 255, 255, 22), width=K)
     c.text(12, H - 12, data.get("address", ""), "mono", 8.5, BONE, anchor="lm")
-    c.text(W - 12, H - 12, "DUTYMAPPER", "display", 10, ACCENT, anchor="rm", tracking=0.6)
+    c.brand(site, W - 12, H - 12, "DUTYMAPPER", 10, tracking=0.6)
     return c.finish()
 
 
@@ -481,15 +514,16 @@ def micro(data, site):
     """350 x 20: one line -- status, name, map, players."""
     W, H = 350, 20
     c = Card(W, H, 5)
+    c.paper(0, 0, W, H)
     label, colour, live = status(data)
     glow_dot(c, 9, H / 2, 2.6, colour, live)
     count = f"{data.get('players', 0)}/{data.get('max_players', 0)}" if live else ("OFF" if label == "OFFLINE" else "—")
     cw = c.width(count, "display", 13)
-    c.text(W - 8, H / 2 + 0.5, count, "display", 13, ACCENT if live else MUTED, anchor="rm")
+    c.text(W - 8, H / 2 + 0.5, count, "display", 13, TEAL if live else PAPER_MUTED, anchor="rm")
     name = clip(c, plain(data.get("hostname") or data.get("name") or ""), "display", 12.5, 170)
-    nw = c.text(17, H / 2 + 0.5, name, "display", 12.5, BONE, anchor="lm")
+    nw = c.text(17, H / 2 + 0.5, name, "display", 12.5, INK, anchor="lm")
     mp = clip(c, data.get("map_name") or data.get("map") or "", "body", 8.5, W - 8 - cw - 10 - (17 + nw + 12))
-    c.text(W - 8 - cw - 9, H / 2 + 0.5, mp, "body", 8.5, MUTED, anchor="rm")
+    c.text(W - 8 - cw - 9, H / 2 + 0.5, mp, "body", 8.5, PAPER_MUTED, anchor="rm")
     return c.finish()
 
 
@@ -502,15 +536,16 @@ def small(data, site):
     pic = picture(data.get("map_image") or site + "/static/art/servers_bunker.jpg", pw, H)
     if pic:
         c.paste_fading(pic, 0, 0, 0.45, horizontal=True)
+    c.paper(96, 0, 242, H)
     x = 104
     name = plain(data.get("hostname") or data.get("name") or "")
     size, lines = fit(c, name, "display", [21, 20, 19, 18, 17, 16, 15, 14], 228, 1)
-    c.text(x, 25, lines[0], "display", size, BONE, anchor="ls")
+    c.text(x, 25, lines[0], "display", size, INK, anchor="ls")
     mp = data.get("map_name") or data.get("map") or ""
     gt = data.get("gametype_name") or ""
-    c.text(x, 31, clip(c, f"{mp}  ·  {gt}" if gt else mp, "body", 9, 228), "body", 9, MUTED)
+    c.text(x, 31, clip(c, f"{mp}  ·  {gt}" if gt else mp, "body", 9, 228), "body", 9, PAPER_MUTED)
     glow_dot(c, x + 3, 50, 2.3, colour, live)
-    c.text(x + 10, 50, data.get("address", ""), "mono", 7.5, BONE, anchor="lm")
+    c.text(x + 10, 50, data.get("address", ""), "mono", 7.5, INK, anchor="lm")
     rx = 350
     c.d.line(((rx - 12) * K, 10 * K, (rx - 12) * K, (H - 10) * K), fill=(255, 255, 255, 20), width=K)
     if live:
@@ -535,19 +570,20 @@ def square(data, site):
         c.paste_fading(pic, 0, 0, 0.42)
     c.fade(0, 0, W, 30, 110, 0, GROUND)
     c.pill(W - 10 - (c.width(label, "body", 7.5, tracking=1.1) + 19), 10, label, colour, live)
+    c.paper(0, 77, W, 87)
     size, lines = fit(c, name, "display", [28, 26, 24, 22, 20, 18, 16], W - 24, 2)
     y = 132 - (len(lines) - 1) * size * 0.92
     for ln in lines:
-        c.text(12, y, ln, "display", size, BONE, anchor="ls")
+        c.text(12, y, ln, "display", size, INK, anchor="ls")
         y += size * 0.92
     mp = data.get("map_name") or data.get("map") or ""
     gt = data.get("gametype_name") or ""
-    c.text(12, 140, clip(c, f"{mp}  ·  {gt}" if gt else mp, "body", 9.5, W - 24), "body", 9.5, MUTED)
+    c.text(12, 140, clip(c, f"{mp}  ·  {gt}" if gt else mp, "body", 9.5, W - 24), "body", 9.5, PAPER_MUTED)
     count_block(c, data, 12, 194, live, label, 40)
     c.sparkline((12, 202, W - 12, 226), data.get("history") or [], live)
     c.d.line((12 * K, 233 * K, (W - 12) * K, 233 * K), fill=(255, 255, 255, 22), width=K)
     c.text(12, 242, data.get("address", ""), "mono", 7.5, BONE, anchor="lm")
-    c.text(W - 12, 242, "DUTYMAPPER", "display", 9, ACCENT, anchor="rm", tracking=0.6)
+    c.brand(site, W - 12, 242, "DUTYMAPPER", 9, tracking=0.6)
     return c.finish()
 
 
@@ -561,7 +597,7 @@ def top_list(c, data, x, y, width, rows, row_h=14, fs=1.0):
         py = y + i * row_h
         if i % 2 == 0:
             band = Image.new("RGBA", c.im.size, (0, 0, 0, 0))
-            ImageDraw.Draw(band).rounded_rectangle((x * K, py * K, (x + width) * K, (py + row_h - 1) * K), radius=3 * K, fill=(255, 255, 255, 9))
+            ImageDraw.Draw(band).rounded_rectangle((x * K, py * K, (x + width) * K, (py + row_h - 1) * K), radius=3 * K, fill=(INK + (10,)) if c.light_at(x, y) else (255, 255, 255, 9))
             c.im.alpha_composite(band)
         c.text(x + 6, py + row_h / 2, str(i + 1), "mono", 7.5 * fs, ACCENT if i < 3 else FAINT, anchor="lm")
         score = f"{p.get('score', 0):,}"
@@ -593,14 +629,15 @@ def showcase(data, site):
         c.text(lw - 14, 256, f"PEAK {data['peak_24h']}", "body", 6.5, FAINT, anchor="ra", tracking=1.2)
     c.sparkline((16, 266, lw - 14, 322), data.get("history") or [], live)
     c.d.line((lw * K, 18 * K, lw * K, (H - 18) * K), fill=(255, 255, 255, 20), width=K)
+    c.paper(lw, 0, W - lw, 104)
     x = lw + 18
     size, lines = fit(c, name, "display", [38, 36, 34, 32, 30, 28, 26, 24], W - x - 18, 1)
-    c.text(x, 50, lines[0], "display", size, BONE, anchor="ls")
+    c.text(x, 50, lines[0], "display", size, INK, anchor="ls")
     mp = data.get("map_name") or data.get("map") or ""
     gt = data.get("gametype_name") or ""
-    c.text(x, 59, clip(c, f"{mp}  ·  {gt}" if gt else mp, "body", 12, W - x - 18), "body", 12, MUTED)
-    c.text(x, 90, data.get("address", ""), "mono", 10, BONE, anchor="lm")
-    c.text(W - 18, 90, "DUTYMAPPER.COM", "display", 11, ACCENT, anchor="rm", tracking=0.8)
+    c.text(x, 59, clip(c, f"{mp}  ·  {gt}" if gt else mp, "body", 12, W - x - 18), "body", 12, PAPER_MUTED)
+    c.text(x, 90, data.get("address", ""), "mono", 10, INK, anchor="lm")
+    c.brand(site, W - 18, 90, "DUTYMAPPER.COM", 11, tracking=0.8)
     c.d.line((x * K, 104 * K, (W - 18) * K, 104 * K), fill=(255, 255, 255, 20), width=K)
     colw = (W - x - 18 - 16) / 2
     n = len(data.get("online_players") or [])
@@ -623,15 +660,18 @@ def widget(data, site):
         c.paste_fading(pic, 0, 0, 0.42)
     c.fade(0, 0, W, 30, 110, 0, GROUND)
     c.pill(W - 10 - (c.width(label, "body", 7.5, tracking=1.1) + 19), 10, label, colour, live)
+    c.paper(0, 96, W, H - 96)
+    c.paper(0, 234, W, 68, GROUND)
+    c.paper(0, H - 32, W, 32, (220, 230, 215))
     size, lines = fit(c, name, "display", [28, 26, 24, 22, 20, 18], W - 28, 2)
     y = 150 - (len(lines) - 1) * size * 0.93
     for ln in lines:
-        c.text(14, y, ln, "display", size, BONE, anchor="ls")
+        c.text(14, y, ln, "display", size, INK, anchor="ls")
         y += size * 0.93
     mp = data.get("map_name") or data.get("map") or ""
     gt = data.get("gametype_name") or ""
     _, mline = fit(c, f"{mp}  ·  {gt}" if gt else mp, "body", [11.5], W - 28, 1)
-    c.text(14, 158, mline[0], "body", 11.5, MUTED)
+    c.text(14, 158, mline[0], "body", 11.5, PAPER_MUTED)
     count_block(c, data, 14, 224, live, label, 50)
     c.text(14, 240, "LAST 24 HOURS", "body", 7, FAINT, tracking=1.3)
     if data.get("peak_24h"):
@@ -644,7 +684,7 @@ def widget(data, site):
     top_list(c, data, 12, 488, W - 24, 5, row_h=18, fs=1.25)
     c.d.line((14 * K, (H - 32) * K, (W - 14) * K, (H - 32) * K), fill=(255, 255, 255, 22), width=K)
     c.text(14, H - 16, data.get("address", ""), "mono", 10, BONE, anchor="lm")
-    c.text(W - 14, H - 16, "DUTYMAPPER", "display", 13, ACCENT, anchor="rm", tracking=0.8)
+    c.brand(site, W - 14, H - 16, "DUTYMAPPER", 13, tracking=0.8)
     return c.finish()
 
 
