@@ -15,14 +15,17 @@ permissions:
   contents: write   # only for the keep-alive commit
   id-token: write   # the signed token dutymapper.com checks
 
-concurrency:
-  group: server-tracker
-  cancel-in-progress: false
-
 jobs:
   track:
     runs-on: ubuntu-latest
     timeout-minutes: 75   # a few minutes of checks, plus up to an hour more while GitHub refuses the hand-off
+    # One check at a time. The group is on this job, not on the whole run, so the next run's checks can
+    # wait their turn while this run's "watch" job (below, outside the group) sees them really start.
+    concurrency:
+      group: server-tracker
+      cancel-in-progress: false
+    outputs:
+      next: ${{ steps.next.outputs.run }}
     steps:
       - uses: actions/checkout@v4
 
@@ -63,7 +66,7 @@ jobs:
             git push
           fi
 
-      # Start the next check, even after a failure -- always. GitHub keeps at most one run waiting in
+      # Start the next check, even after a failure -- always. GitHub keeps at most one check waiting in
       # the concurrency group (a newer one replaces an older waiting one), so there is never a second
       # chain. (Skipping when "a run is already waiting" broke the chain on 2026-10-19 and 10-21: the
       # run GitHub listed as waiting never ran, and checks stopped for 4 hours, until the schedule.)
@@ -73,8 +76,9 @@ jobs:
       # meanwhile, so the site doesn't go stale, and keep asking for up to an hour. After a failed
       # check, wait first, so a broken check retries every 5 minutes rather than every few seconds.
       # To stop the tracker, disable this workflow in the Actions tab; a run that finds it disabled
-      # stops asking.
+      # stops asking. The new run's number goes to the "watch" job.
       - name: Start the next check
+        id: next
         if: always() && github.ref == 'refs/heads/master'
         timeout-minutes: 62
         working-directory: server-tracker
@@ -84,10 +88,11 @@ jobs:
           FONTS_DIR: ${{ github.workspace }}/fonts
         run: |
           if [ "$FAILED" = "true" ]; then sleep 240; fi
-          # how many runs a dispatch started since $1, not counting this one (nothing when GitHub won't say)
-          queued_since() {
+          # the newest run a dispatch started since $1, not counting this one (nothing when GitHub won't say)
+          started_since() {
             gh run list -R "$GITHUB_REPOSITORY" --workflow server-tracker.yml --event workflow_dispatch --limit 5 \
-              --json databaseId,createdAt --jq "[.[] | select(.createdAt >= \"$1\" and .databaseId != $GITHUB_RUN_ID)] | length" \
+              --json databaseId,createdAt \
+              --jq "[.[] | select(.createdAt >= \"$1\" and .databaseId != $GITHUB_RUN_ID)][0].databaseId // empty" \
               2>/dev/null || true
           }
           for try in $(seq 1 12); do
@@ -95,7 +100,12 @@ jobs:
             if gh workflow run server-tracker.yml -R "$GITHUB_REPOSITORY" --ref master; then
               for look in 1 2 3; do
                 sleep 10
-                if [ "$(queued_since "$since")" -gt 0 ] 2>/dev/null; then echo "The next check is queued."; exit 0; fi
+                next=$(started_since "$since")
+                if [ -n "$next" ]; then
+                  echo "The next check is queued (run $next)."
+                  echo "run=$next" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
               done
               echo "GitHub took the request but no new run showed up; asking again."
             fi
@@ -105,4 +115,82 @@ jobs:
             python tracker.py || sleep 60
           done
           exit 1
+
+  # GitHub sometimes accepts the next run and then fails to start it ("This run likely failed because of
+  # a workflow file issue", no jobs: 2026-11-09 18:08, 11-11 20:19, 11-12 13:37, during its Actions
+  # trouble). The checks then stopped for hours, until the schedule or a manual restart, because the
+  # run that could have noticed had already finished. This job runs after the checks, outside the
+  # concurrency group, and waits until the next run's checks have really started. If GitHub drops that
+  # run, it starts another. If a newer run took the queued one's place, it watches that one instead.
+  watch:
+    needs: track
+    if: always() && github.ref == 'refs/heads/master' && needs.track.outputs.next != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Make sure the next check starts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEXT: ${{ needs.track.outputs.next }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          next="$NEXT"
+          watching_since=$(date +%s)
+          end=$(( $(date +%s) + 28 * 60 ))
+          polls=0
+          restarts=0
+          # the newest run a dispatch started since $1, not counting this one (nothing when GitHub won't say)
+          started_since() {
+            gh run list -R "$R" --workflow server-tracker.yml --event workflow_dispatch --limit 5 \
+              --json databaseId,createdAt \
+              --jq "[.[] | select(.createdAt >= \"$1\" and .databaseId != $GITHUB_RUN_ID)][0].databaseId // empty" \
+              2>/dev/null || true
+          }
+          # GitHub dropped run $next: start another one and watch that instead
+          restart() {
+            restarts=$((restarts + 1))
+            if [ "$restarts" -gt 10 ]; then echo "Gave up after 10 tries; the schedule restarts the tracker."; exit 1; fi
+            state=$(gh api "repos/$R/actions/workflows/server-tracker.yml" --jq .state 2>/dev/null || true)
+            if [ "${state#disabled}" != "$state" ]; then echo "The tracker is switched off ($state): no next check."; exit 0; fi
+            since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            if gh workflow run server-tracker.yml -R "$R" --ref master; then
+              for look in 1 2 3; do
+                sleep 10
+                new=$(started_since "$since")
+                if [ -n "$new" ]; then echo "Started run $new in its place."; next=$new; watching_since=$(date +%s); polls=0; return 0; fi
+              done
+              echo "GitHub took the request but no new run showed up."
+            else
+              echo "GitHub refused the request."
+            fi
+            sleep 50   # then look at run $next again, and ask again if it's still dead
+          }
+          while [ "$(date +%s)" -lt "$end" ]; do
+            # every 10 seconds for the first minute, then every 30 (GitHub allows 1,000 API calls an hour)
+            polls=$((polls + 1))
+            if [ "$polls" -le 6 ]; then sleep 10; else sleep 30; fi
+            run=$(gh api "repos/$R/actions/runs/$next" --jq '"\(.status) \(.conclusion // "-") \(.created_at)"' 2>/dev/null || true)
+            job=$(gh api "repos/$R/actions/runs/$next/jobs" \
+              --jq '[.jobs[] | select(.name == "track")][0] | if . == null then "none" else "\(.status) \(.steps | length)" end' \
+              2>/dev/null || true)
+            status=""; conclusion=""; created=""
+            read -r status conclusion created <<< "$run" || true
+            case "$job" in
+              "in_progress "*) echo "Run $next's checks have started."; exit 0 ;;
+              "completed "[1-9]*) echo "Run $next's checks ran."; exit 0 ;;
+            esac
+            if [ "$status" = completed ] && [ "$conclusion" = cancelled ]; then
+              # A newer run took its place in the queue (it carries on), or someone stopped the tracker.
+              newer=$(gh run list -R "$R" --workflow server-tracker.yml --limit 5 --json databaseId,createdAt,status \
+                --jq "[.[] | select(.createdAt > \"$created\" and .status != \"completed\")][0].databaseId // empty" \
+                2>/dev/null || true)
+              if [ -n "$newer" ]; then echo "Run $next gave way to run $newer; watching that."; next=$newer; watching_since=$(date +%s); polls=0; continue; fi
+              echo "Run $next was cancelled and no newer run is waiting: the tracker was stopped."; exit 0
+            elif [ "$status" = completed ]; then
+              echo "GitHub failed to start run $next ($conclusion)."; restart
+            elif [ "$job" = none ] && [ $(( $(date +%s) - watching_since )) -ge 300 ]; then
+              echo "Run $next is still ${status:-unknown} after 5 minutes, with no checks set up."; restart
+            fi
+          done
+          echo "Run $next is still waiting its turn after 28 minutes; leaving it to carry on."
 

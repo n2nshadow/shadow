@@ -15,9 +15,12 @@ can't send UDP. So this GitHub Action does the asking:
    minutes. Every upload is a storage write, so they aren't redrawn every minute regardless.
 
 Each run of the workflow (`.github/workflows/server-tracker.yml`) takes about 4 minutes, and its
-last step starts the next run, so the site hears from every server about once a minute. GitHub's
-own schedule only restarts that chain if it ever stops: on its own it runs hours late (on
-2026-10-16, about every 4 hours).
+last step starts the next run, so the site hears from every server about once a minute. A second,
+small job (`watch`) then waits until that next run's checks have really started, and starts another
+if GitHub drops it: GitHub sometimes accepts a run and then fails to start it (2026-11-09, 11-11 and
+11-12), and before the watch the checks stopped for hours each time. GitHub's own schedule only
+restarts the chain if it ever stops: on its own it runs hours late (on 2026-10-16, about every 4
+hours).
 
 To stop the tracker, disable the workflow in the Actions tab. To restart it, open the workflow
 there and click "Run workflow".
